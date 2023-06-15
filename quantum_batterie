@@ -1,0 +1,454 @@
+import qutip as qt
+import numpy as np
+
+class QuantumBattery_Dicke:
+    
+    def __init__(self,Nb=1,Nc=1,m=1,Bz=1,h=1,A=1,delta=1,intern=0):
+        
+        self.Nb = Nb
+        self.Nc = Nc
+        self.N = self.Nb+self.Nc
+        self.m = m
+        self.B = Bz
+        self.h = h
+        self.A = A
+        self.delta = delta
+        self.intern = intern
+        
+        self.H = self.create_H(self.Nb,self.Nc,self.h,self.B,self.delta,self.A,self.m,self.intern)
+        
+        self.Hb = qt.jmat(self.Nb/2, "z")
+        self.Hb = qt.Qobj(np.flip(np.flip(self.Hb.full())[:min(self.m,self.Nb,self.Nc)+1,:min(self.m,self.Nb,self.Nc)+1]))
+            
+        self.Hc = qt.jmat(self.Nc/2, "z")
+        self.Hc = qt.Qobj(self.Hc.full()[:min(self.m,self.Nc,self.Nb)+1,:min(self.m,self.Nc,self.Nb)+1])
+    
+    def create_H(self,Nb,Nc,h,B,delta,A,m,intern):
+        
+        n = min(self.Nb,self.m)
+        
+        j = np.arange(n+1)
+        j_u = j[1:len(j)]
+        
+        b_list = (B*(j-Nb/2)+h*(m-j-Nc/2)+
+                  2*delta*(j-Nb/2)*(m-j-Nc/2))
+        u_list = A*np.sqrt(j_u*(Nb-j_u+1)*
+                           (Nc-m+j_u)*(m-j_u+1))
+        
+        H = np.diag(b_list) + np.diag(u_list,k=1) + np.diag(u_list,k=-1)
+        
+        H[np.isnan(H)] = 0
+        
+        return qt.Qobj(H)
+    
+class CST_QB_Dicke:
+    
+    def __init__(self,Nb,Nt,Nc,m,Bz=1,h=1,A1=1,A2=1,delta=0):
+        
+        self.Nc = Nc
+        self.Nt = Nt
+        self.Nb = Nb
+        
+        self.A1 = A1
+        self.A2 = A2
+        
+        self.m = m
+        
+        self.Hc = qt.jmat(self.Nc/2,"z")
+        self.Ht = qt.jmat(self.Nt/2,"z")
+        self.Hb = qt.jmat(self.Nb/2,"z")
+        
+        self.Hi1 = self.create_Hi(self.Nc,self.Nt)
+        self.Hi2 = self.create_Hi(self.Nt,self.Nb)
+        
+        self.Hc_N,self.Ht_N,self.Hb_N,self.Hi1_N,self.Hi2_N = self.create_tensors()
+        
+        self.H = self.Hc_N+self.A1*self.Hi1_N+self.Ht_N+self.A2*self.Hi2_N+self.Hb_N
+        
+    def create_Hi(self,N_1,N_2):
+        
+        Hi = qt.tensor(qt.jmat(N_1/2,"+"),qt.jmat(N_2/2,"-"))+qt.tensor(qt.jmat(N_1/2,"-"),qt.jmat(N_2/2,"+"))
+        
+        return Hi
+    
+    def create_tensors(self):
+        
+        Hc_N = qt.tensor([self.Hc,qt.qeye(self.Nt+1),qt.qeye(self.Nb+1)])
+        Ht_N = qt.tensor([qt.qeye(self.Nc+1),self.Ht,qt.qeye(self.Nb+1)])
+        Hb_N = qt.tensor([qt.qeye(self.Nc+1),qt.qeye(self.Nt+1),self.Hb])
+        
+        Hi1_N = qt.tensor(self.Hi1,qt.qeye(self.Nb+1))
+        Hi2_N = qt.tensor(qt.qeye(self.Nc+1),self.Hi2)
+        
+        return Hc_N,Ht_N,Hb_N,Hi1_N,Hi2_N        
+         
+
+            
+class QuantumBattery_spin:
+    
+    def __init__(self,Nb=1,Nc=1,m=1,Bz=1,g=1,h=1,A=1,delta=1,mu_b=1,intern=0):
+                
+        self.Nb = Nb
+        self.Nc = Nc
+        self.N = self.Nb + self.Nc
+        self.m = m
+        
+        self.Bz = Bz
+        self.g = g
+        self.h = h
+        self.A = A
+        self.delta = delta
+        self.mu_b = mu_b
+        self.B = abs(self.g*self.mu_b*self.Bz)
+        
+        if self.Nb > 0:
+            self.spin_matrix_b = self.create_spin_matrix(self.Nb)
+            Hb = self.spin_matrix_b                
+            self.Hb = 0.5*self.B*Hb
+            
+        self.Hb += intern*self.create_Hbi3()
+        
+        if self.Nc > 0:
+            self.spin_matrix_c = self.create_spin_matrix(self.Nc)
+            Hc = self.spin_matrix_c
+            self.Hc = 0.5*self.h*Hc        
+        
+        self.Hi = self.create_Hi()
+        self.H = self.create_H()[0]
+        
+        self.Hb_N = self.create_H()[1]
+        self.Hc_N = self.create_H()[2]
+        
+        
+    def create_spin_matrix(self,N):
+        
+        spin_matrix = qt.qzero([2]*N)
+        
+        for i in range(N):
+            
+            comb = [qt.qeye(2)]*N
+            comb[i] = qt.sigmaz()
+            tensor = qt.tensor(comb)
+            spin_matrix += tensor
+        
+        return spin_matrix
+    
+    
+    def create_Hbi(self):
+        
+        if self.Nb > 0:
+            
+            S_plus = qt.qzero([2]*self.Nb)
+            S_min = qt.qzero([2]*self.Nb)
+            
+            for i in range(self.Nb-1):
+
+                comb_plus = [qt.qeye(2)]*self.Nb
+                comb_plus[i] = qt.destroy(2)
+                tensor_plus = qt.tensor(comb_plus)
+                S_plus += tensor_plus
+
+                comb_min = [qt.qeye(2)]*self.Nb
+                comb_min[i] = qt.create(2)
+                tensor_min = qt.tensor(comb_min)
+                S_min += tensor_min
+            
+            Hbi = S_plus + S_min
+            
+            return Hbi
+        
+    def create_Hbi_2(self):
+        
+        N = self.Nb
+        matrix = np.zeros((2**N,2**N))
+        state = np.arange(0,2**N)+0.1
+        interaction = np.zeros(2**N)
+        L = len(state)
+
+        for i in range(N-1):
+
+            factor = 2**(i+2)
+            sinus = np.sin(factor*state*np.pi/L)
+            abs_invers_sinus = np.abs(1/np.sin(factor*state*np.pi/L))
+
+            phase1 = sinus*abs_invers_sinus
+
+            factor_2 = 2**(i+1)
+            sinus_2 = np.sin(factor_2*state*np.pi/L)
+            abs_invers_sinus_2 = np.abs(1/np.sin(factor_2*state*np.pi/L))
+
+            phase2 = (sinus_2*abs_invers_sinus_2).reshape((2**N,1))
+
+            sub_matrix = phase2*phase1
+            sub_matrix[np.where(sub_matrix<0)] = 0
+
+            matrix+=sub_matrix
+#             matrix = matrix - np.diag(np.diag(matrix))
+
+        return qt.Qobj(matrix,[[2]*N,[2]*N])
+    
+    
+    def create_Hbi3(self):
+        
+        N = self.Nb
+
+        spin_matrix = qt.qzero([2]*N)
+
+        for i in range(N-1):
+
+            comb = [qt.qeye(2)]*(N-1)
+            comb[i] = qt.tensor(qt.sigmap(),qt.sigmam())+qt.tensor(qt.sigmam(),qt.sigmap())
+            tensor = qt.tensor(comb)
+            spin_matrix += tensor
+            
+        return spin_matrix
+    
+    
+    def create_Hi(self):
+        
+        if self.Nb > 0 and self.Nc > 0:
+            
+            S_plus = qt.qzero([2]*self.Nb)
+            S_min = qt.qzero([2]*self.Nb)
+
+            J_plus = qt.qzero([2]*self.Nc)
+            J_min = qt.qzero([2]*self.Nc)
+
+            Sz = self.spin_matrix_b
+            Jz = self.spin_matrix_c
+
+            for i in range(self.Nb):
+
+                comb_plus = [qt.qeye(2)]*self.Nb
+                comb_plus[i] = qt.destroy(2)
+                tensor_plus = qt.tensor(comb_plus)
+                S_plus += tensor_plus
+
+                comb_min = [qt.qeye(2)]*self.Nb
+                comb_min[i] = qt.create(2)
+                tensor_min = qt.tensor(comb_min)
+                S_min += tensor_min
+
+            for i in range(self.Nc):
+
+                comb_plus = [qt.qeye(2)]*self.Nc
+                comb_plus[i] = qt.destroy(2)
+                tensor_plus = qt.tensor(comb_plus)
+                J_plus += tensor_plus
+
+                comb_min = [qt.qeye(2)]*self.Nc
+                comb_min[i] = qt.create(2)
+                tensor_min = qt.tensor(comb_min)
+                J_min += tensor_min
+
+            Hi = self.A*(qt.tensor(S_plus,J_min) + 
+                           qt.tensor(S_min,J_plus)) + self.delta*(qt.tensor(Sz,Jz))
+
+            return Hi
+        
+        else:
+            return qt.qzero([2]*self.N)
+    
+    
+    def create_H(self):
+        
+        if self.Nb > 0:
+            Hb = self.Hb
+            for i in range(self.N-self.Nb):
+                Hb = qt.tensor(Hb,qt.qeye(2))
+        else:
+            Hb = qt.qzero([2]*self.N)
+        
+        if self.Nc > 0:
+            Hc = self.Hc
+            for i in range(self.N-self.Nc):
+                Hc = qt.tensor(qt.qeye(2),Hc)
+        else:
+            Hc = qt.qzero([2]*self.N)
+        
+        H = Hb+Hc+self.Hi
+        
+        return H,Hb,Hc
+    
+    def spin_counter(self,N):
+        
+        possible_states = np.arange(0,2**N)+0.1
+        counts = np.zeros(2**N)
+        L = len(possible_states)
+        
+        for i in range(N):
+            
+            factor = 2**(i+1)
+            sinus = np.sin(factor*possible_states*np.pi/L)
+            abs_invers_sinus = np.abs(1/np.sin(factor*possible_states*np.pi/L))
+            counts+=sinus*abs_invers_sinus
+            
+        return np.round(counts)
+    
+    def spin_up_states(self,N,m):
+        
+        index_list_up = []
+        target_spins = np.zeros(2**N)
+        
+        m = 2*m-N
+        spins = self.spin_counter(N)
+        
+        for i,k in enumerate(spins):
+            if k == m:
+                index_list_up.append(i)
+        
+        target_spins[index_list_up] = 1
+        
+        return spins/2,index_list_up,target_spins
+    
+class QuantumBattery_2:
+    
+    def __init__(self,Nc=1,Ni=1,Nb=1,m=1,B_c=1,B_i=1,B_b=1,A_ci=1,delta_ci=0,A_ib=1,delta_ib=0):
+        
+        self.Nb = Nb
+        self.Nc = Nc
+        self.Ni = Ni
+        self.N = self.Nb+self.Nc+self.Ni
+        
+        self.m = m
+        self.B_c = B_c
+        self.B_i = B_i
+        self.B_b = B_b
+
+        self.A_ci = A_ci
+        self.delta_ci = delta_ci
+
+        self.A_ib = A_ib
+        self.delta_ib = delta_ib
+        
+        if self.Nc > 0:
+            
+            self.spin_matrix_c = self.create_spin_matrix(self.Nc)
+            Hc = self.spin_matrix_c
+            self.Hc = 0.5*self.B_c*Hc
+            
+        if self.Ni > 0:
+            
+            self.spin_matrix_i = self.create_spin_matrix(self.Ni)
+            Hi = self.spin_matrix_i
+            self.Hi = 0.5*self.B_i*Hi 
+        
+        if self.Nb > 0:
+            
+            self.spin_matrix_b = self.create_spin_matrix(self.Nb)
+            Hb = self.spin_matrix_b                
+            self.Hb = 0.5*self.B_b*Hb
+        
+        self.H_ci = self.create_H_i(self.Nc,self.Ni,self.A_ci,self.delta_ci)
+        self.H_ib = self.create_H_i(self.Ni,self.Nb,self.A_ib,self.delta_ib)
+        
+        self.H,self.Hc_N,self.Hi_N,self.Hb_N = self.create_H()
+
+        
+    def create_spin_matrix(self,N):
+        
+        spin_matrix = qt.qzero([2]*N)
+
+        for i in range(N):
+
+            comb = [qt.qeye(2)]*N
+            comb[i] = qt.sigmaz()
+            tensor = qt.tensor(comb)
+            spin_matrix += tensor
+
+        return spin_matrix
+
+
+    def create_H_i(self,N1,N2,c1,c2):
+        
+        spin_matrix_1 = self.create_spin_matrix(N1)
+        spin_matrix_2 = self.create_spin_matrix(N2)
+        
+        if N1 > 0 and N2 > 0:
+            
+            S_plus = qt.qzero([2]*N1)
+            S_min = qt.qzero([2]*N1)
+
+            J_plus = qt.qzero([2]*N2)
+            J_min = qt.qzero([2]*N2)
+
+            Sz = spin_matrix_1
+            Jz = spin_matrix_2
+            
+            for i in range(N1):
+
+                comb_plus = [qt.qeye(2)]*N1
+                comb_plus[i] = qt.destroy(2)
+                tensor_plus = qt.tensor(comb_plus)
+                S_plus += tensor_plus
+
+                comb_min = [qt.qeye(2)]*N1
+                comb_min[i] = qt.create(2)
+                tensor_min = qt.tensor(comb_min)
+                S_min += tensor_min
+
+            for i in range(N2):
+
+                comb_plus = [qt.qeye(2)]*N2
+                comb_plus[i] = qt.destroy(2)
+                tensor_plus = qt.tensor(comb_plus)
+                J_plus += tensor_plus
+
+                comb_min = [qt.qeye(2)]*N2
+                comb_min[i] = qt.create(2)
+                tensor_min = qt.tensor(comb_min)
+                J_min += tensor_min
+            
+            H_i = c1*(qt.tensor(S_plus,J_min) + 
+                           qt.tensor(S_min,J_plus)) + c2*(qt.tensor(Sz,Jz))
+
+            return H_i
+        
+        else:
+            return qt.qzero([2]*(self.Nc+self.Nb))
+    
+    def create_H(self):
+        
+        N = self.Nc+self.Ni+self.Nb
+
+        if self.Nc > 0:
+            Hc = self.Hc
+            for i in range(N-self.Nc):
+                Hc = qt.tensor(Hc,qt.qeye(2))  
+        else:
+            Hc = qt.qzero([2]*self.N)
+            
+        if self.Ni > 0:
+            Hi = self.Hi
+            for i in range(self.Nc):
+                Hi = qt.tensor(qt.qeye(2),Hi)
+            for j in range(self.Nb):
+                Hi = qt.tensor(Hi,qt.qeye(2))
+        else:
+            Hi = qt.qzero([2]*N)
+ 
+        if self.Nb > 0:
+            Hb = self.Hb
+            for i in range(N-self.Nb):
+                Hb = qt.tensor(qt.qeye(2),Hb)
+        else:
+            Hb = qt.qzero([2]*N)
+        
+        if self.Nc>0 and self.Ni>0:
+            H_ci = self.H_ci
+            for i in range(self.Nb):
+                H_ci = qt.tensor(H_ci,qt.qeye(2))
+        else:
+            H_ci = qt.qzero([2]*N)
+            
+        if self.Ni>0 and self.Nb>0:
+            H_ib = self.H_ib
+            for i in range(self.Nc):
+                H_ib = qt.tensor(qt.qeye(2),H_ib)
+        else:
+            H_ib = qt.qzero([2]*N)
+        
+
+        H = Hc+H_ci+Hi+H_ib+Hb
+        
+        return H,Hc,Hi,Hb
